@@ -1,9 +1,25 @@
 ###################################################
-# Title: Getting data from KTBL Leistungs-Kosten-Rechner Pflanzenbau
-# Purpose: A script based on Christoph Pahmeyer's approach (https://github.com/fruchtfolge/KTBL-APIs) to webscrape data from KTBL's Leistungs-Kosten-Rechner Pflanzenbau
+# Title: Getting data from KTBL Leistungs-Kosten-Rechner Pflanzenbau (v2)
+# Purpose: Webscrape data from KTBL's Leistungs-Kosten-Rechner Pflanzenbau.
+#          v2 adds:
+#            1) Pre-filter validation: before requesting a (crop, system) with a
+#               given TARGET, check `ktbl_available_options.csv` and skip if any
+#               of TARGET's parameters (soil, size, mech, dist) is not actually
+#               offered by the site for that (crop, system). This fixes the
+#               fallback bug where the server silently returned data from a
+#               default combination when the requested one didn't exist.
+#            2) Fertilizer mapping by German display name into 5 separate
+#               English-named columns:
+#                 - can_27n            (Kalkammonsalpeter 27 % N)
+#                 - dap_18n            (Diammonphosphat 18 % N, 46 % P2O5)
+#                 - cattle_slurry      (Gülle, Rind)
+#                 - cattle_pig_slurry  (Gülle, Rind und Schwein gemischt)
+#                 - biogas_digestate   (Gärrest, Biogasanlage)
+#               Uses exact-match
 # Author: Bartosz Bartkowski
-# Input data: none
-# Output data: dataset with yields, prices and costs for different crops and management combinations
+# Revised by: Giovanna Limon v2
+# Input data: ktbl_available_options.csv (produced by ktbl_options_scraper.r)
+# Output data: tibble `results_final` with one row per (crop, production_system)
 ###################################################
 
 ######################################
@@ -23,27 +39,20 @@
 # --------------------------
 # BASE <- "https://daten.ktbl.de/dslkrpflanze"
 
-# list of parameters including all variants to go through (not used when combining with the loop in ktbl_multisystem_loop.R)
 # TARGET <- list(
 #   cultivation_label = "integriert",
-#   # cultivation_label = "ökologisch"
 #   plot_size_ha      = 2,
-#   # plot_size_ha     = 20,
-#   # plot_size_ha     = 80,
 #   yield_soil        = "hoch, mittlerer Boden",
-#   # yield_soil       = "mittel, mittlerer Boden",
 #   mechanization     = 120,
-#   # mechanization    = 230,
 #   distance_km       = 2
-#   # distance_km      = 15
 # )
 #####################################
 
-# For Kulturgruppe selection
-KULTURGRUPPEN <- c("1", "2", "3", "4", "5", "9")#, "11")
+# For Kulturgruppe selection (can be pre-set by a wrapper like smoke_test.R)
+if (!exists("KULTURGRUPPEN")) KULTURGRUPPEN <- c("1", "2", "3", "4", "5", "9") #, "11")
 # Available values:
 # 1 = Getreide
-# 2 = Mais  
+# 2 = Mais
 # 3 = Kartoffeln und Zuckerrüben
 # 4 = Futterbau
 # 5 = Zwischenfrüchte
@@ -52,6 +61,33 @@ KULTURGRUPPEN <- c("1", "2", "3", "4", "5", "9")#, "11")
 # Or use "Alle" for all groups
 
 POLITE_DELAY_MS <- 400
+
+# --------------------------
+# Fertilizer mapping: English variable name -> German display label in KTBL
+# Used for exact-label extraction below.
+# --------------------------
+FERTILIZER_MAP <- list(
+  can_27n           = "Kalkammonsalpeter (27 % N), lose",
+  dap_18n           = "Diammonphosphat (18 % N, 46 % P₂O₅), lose",
+  cattle_slurry     = "Gülle, Rind",
+  cattle_pig_slurry = "Gülle, Rind und Schwein gemischt",
+  biogas_digestate  = "Gärrest, Biogasanlage"
+)
+
+# --------------------------
+# Load available-options reference table (produced by ktbl_options_scraper.r).
+# Used to pre-filter invalid (crop, system, parameter) combinations before
+# sending them to the server (which would otherwise silently fall back).
+# --------------------------
+if (!exists("AVAILABLE_OPTIONS")) {
+  options_path <- here::here("ktbl_available_options.csv")
+  if (!file.exists(options_path)) {
+    stop("ktbl_available_options.csv not found. Run ktbl_options_scraper.r first.")
+  }
+  AVAILABLE_OPTIONS <- read.csv(options_path, stringsAsFactors = FALSE, encoding = "UTF-8")
+  # Drop placeholder rows (labels like "[Schlaggröße]")
+  AVAILABLE_OPTIONS <- AVAILABLE_OPTIONS[!grepl("^\\[", AVAILABLE_OPTIONS$available_label), ]
+}
 
 # --------------------------
 # Cookie file + helpers
@@ -78,6 +114,20 @@ post_state_html <- function(body) {
     resp_html()
 }
 
+# In case of timeout 
+# Returns NULL on failure so callers can handle it and continue the run
+# instead of crashing the entire loop.
+safe_post_state_html <- function(body, context = "") {
+  tryCatch(
+    post_state_html(body),
+    error = function(e) {
+      message("HTTP error", if (nzchar(context)) paste0(" (", context, ")") else "",
+              ": ", conditionMessage(e))
+      NULL
+    }
+  )
+}
+
 # --------------------------
 # DOM utilities
 # --------------------------
@@ -93,36 +143,83 @@ option_value_by_label <- function(doc, select_name, label_text) {
   vals[idx[1]]
 }
 
-# Get all available system values and labels for a crop
 get_all_systems <- function(doc) {
   sel <- html_node(doc, xpath = "//select[@name='cropSysId']")
   if (is.na(html_name(sel))) return(NULL)
-  
+
   opts <- html_nodes(sel, "option")
   vals <- html_attr(opts, "value")
   labs <- html_text(opts, trim = TRUE)
-  
-  # Filter out empty values
-  valid_idx <- which(!is.na(vals) & nzchar(vals))
-  
+
+  # Skip placeholder rows whose label starts with '[' (e.g. "[Anbausystem]")
+  valid_idx <- which(!is.na(vals) & nzchar(vals) & !str_starts(labs, fixed("[")))
   if (length(valid_idx) == 0) return(NULL)
-  
+
   tibble(
     system_value = vals[valid_idx],
     system_label = labs[valid_idx]
   )
 }
 
+# NA-row builder with the new fertilizer schema (5 separate columns)
+na_result_row <- function(crop_name, system_label) {
+  tibble(
+    crop = crop_name, production_system = system_label,
+    yield = NA_real_, price = NA_real_, turnover = NA_real_,
+    direct_costs = NA_real_, direct_cost_free = NA_real_,
+    variable_costs = NA_real_, contribution_margin = NA_real_,
+    execution_costs = NA_real_,
+    can_27n = NA_real_, dap_18n = NA_real_,
+    cattle_slurry = NA_real_, cattle_pig_slurry = NA_real_,
+    biogas_digestate = NA_real_,
+    income = NA_real_
+  )
+}
+
+page_matches_crop <- function(doc, expected_crop_val) {
+  selected_val <- html_attr(
+    html_node(doc, xpath = "//select[@name='cropId']/option[@selected]"),
+    "value"
+  )
+  !is.na(selected_val) && selected_val == expected_crop_val
+}
+
 # Convert German number format to R numeric
 de_num <- function(x) {
   if (is.na(x) || length(x) == 0) return(NA_real_)
-  x <- str_replace_all(x, "\u00A0", "")
+  x <- str_replace_all(x, " ", "")
   x <- str_replace_all(x, " ", "")
   x <- str_replace_all(x, "\\.", "")
   x <- str_replace(x, ",", ".")
   as.numeric(str_extract(x, "-?\\d+(?:\\.\\d+)?"))
 }
 
+# --------------------------
+# Pre-filter helper: is this (cultivation, crop, system) able to accept
+# the requested value for `parameter`?
+# --------------------------
+is_valid_option <- function(cultivation, crop, prod_system, parameter, value) {
+  any(
+    AVAILABLE_OPTIONS$cultivation       == cultivation &
+    AVAILABLE_OPTIONS$crop              == crop &
+    AVAILABLE_OPTIONS$production_system == prod_system &
+    AVAILABLE_OPTIONS$parameter         == parameter &
+    AVAILABLE_OPTIONS$available_label   == as.character(value)
+  )
+}
+
+# Returns TRUE iff TARGET's 4 specification parameters are all valid for this
+# (cultivation, crop, system) combo according to the options map.
+target_is_valid <- function(cultivation, crop, prod_system, target) {
+  is_valid_option(cultivation, crop, prod_system, "areaSize",    target$plot_size_ha) &&
+  is_valid_option(cultivation, crop, prod_system, "soilHarvest", target$yield_soil) &&
+  is_valid_option(cultivation, crop, prod_system, "mechanics",   target$mechanization) &&
+  is_valid_option(cultivation, crop, prod_system, "distance",    target$distance_km)
+}
+
+# --------------------------
+# Results-table parser (with new fertilizer schema)
+# --------------------------
 parse_results_table <- function(doc, crop_name, system_label) {
   tabs1 <- html_node(doc, css = "#tabs-1")
   if (is.na(html_name(tabs1))) {
@@ -134,27 +231,27 @@ parse_results_table <- function(doc, crop_name, system_label) {
     message("  No table found for: ", crop_name, " (", system_label, ")")
     return(NULL)
   }
-  
+
   # Extract yield and price from first data row
   first_data_row <- html_node(table, xpath = ".//tr[td[@class='tabelleEbene2 left']][1]")
   yield_val <- NA_real_
   price_val <- NA_real_
-  
+
   if (!is.na(html_name(first_data_row))) {
     tds <- html_nodes(first_data_row, "td")
     if (length(tds) >= 5) {
       yield_text <- html_text(tds[2], trim = TRUE)
       yield_val <- de_num(yield_text)
-      
+
       price_text <- html_text(tds[4], trim = TRUE)
       price_val <- de_num(price_text)
     }
   }
-  
-  # Function to find value in a row by label text
+
+  # Find a "summary value" by exact label (financial figures, second-to-last cell)
   find_value_by_label <- function(label_pattern) {
     target <- stringr::str_to_lower(stringr::str_trim(label_pattern))
-    
+
     xpath_query <- sprintf(
       ".//tr[td[contains(@class,'tabelle') and
               translate(normalize-space(translate(., ':' , '')),
@@ -164,9 +261,9 @@ parse_results_table <- function(doc, crop_name, system_label) {
          ]]",
       target
     )
-    
+
     matching_rows <- rvest::html_nodes(table, xpath = xpath_query)
-    
+
     for (row in matching_rows) {
       tds <- rvest::html_nodes(row, "td")
       if (length(tds) >= 2) {
@@ -179,27 +276,25 @@ parse_results_table <- function(doc, crop_name, system_label) {
     }
     return(NA_real_)
   }
-  
-  # similar function specifically for more complex data (e.g. fertilizer amount)
-  find_amount_by_label <- function(label_pattern) {
+
+  # Find an "amount" value by EXACT label (input rows like fertilizers,
+  # second cell). Uses exact match instead of starts-with to avoid the
+  # "Gülle, Rind" / "Gülle, Rind und Schwein gemischt" collision.
+  find_amount_by_exact_label <- function(label_pattern) {
     target <- stringr::str_to_lower(stringr::str_trim(label_pattern))
-    
+
     xpath_query <- sprintf(
-      ".//tr[
-        td[contains(@class,'tabelle') and
-           starts-with(
-             translate(
-               normalize-space(translate(., ':' , '')),
-               'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ',
-               'abcdefghijklmnopqrstuvwxyzäöü'
-             ),
-             '%s')
+      ".//tr[td[contains(@class,'tabelle') and
+              translate(normalize-space(translate(., ':' , '')),
+                        'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ',
+                        'abcdefghijklmnopqrstuvwxyzäöü'
+              ) = '%s'
          ]]",
       target
     )
-    
+
     matching_rows <- rvest::html_nodes(table, xpath = xpath_query)
-    
+
     for (row in matching_rows) {
       tds <- rvest::html_nodes(row, "td")
       if (length(tds) >= 2) {
@@ -212,34 +307,39 @@ parse_results_table <- function(doc, crop_name, system_label) {
     }
     return(NA_real_)
   }
-  
-  # Extract key financial metrics
-  turnover <- find_value_by_label("summe leistung")
-  direct_costs <- find_value_by_label("summe direktkosten")
-  direct_cost_free <- find_value_by_label("direktkostenfreie leistung")
-  variable_costs <- find_value_by_label("summe variable kosten")
-  contribution_margin <- find_value_by_label("deckungsbeitrag")
-  execution_costs <- find_value_by_label("arbeitserledigungskosten")
-  n_fertilizer <- find_amount_by_label("kalkammonsalpeter") # 27 % N
-  org_fertilizer <- find_amount_by_label("gülle, rind")
 
-  # Calculate income
+  # Extract key financial metrics
+  turnover            <- find_value_by_label("summe leistung")
+  direct_costs        <- find_value_by_label("summe direktkosten")
+  direct_cost_free    <- find_value_by_label("direktkostenfreie leistung")
+  variable_costs      <- find_value_by_label("summe variable kosten")
+  contribution_margin <- find_value_by_label("deckungsbeitrag")
+  execution_costs     <- find_value_by_label("arbeitserledigungskosten")
+
+  # Extract fertilizer amounts using the German-name -> English-name mapping
+  fert_values <- lapply(FERTILIZER_MAP, find_amount_by_exact_label)
+
+  # Compute income strictly from the three components. If any of them is NA,
+  # leave income = NA so the parsing failure stays visible
   income <- if (!is.na(turnover) && !is.na(direct_costs) && !is.na(execution_costs)) {
     turnover - direct_costs - execution_costs
   } else {
-    contribution_margin
+    NA_real_
   }
-  
+
   message("  [SUCCESS] ", crop_name, " | ", system_label,
           " - yield: ", round(yield_val, 2), " t/ha",
           ", price: ", round(price_val, 2), " €/t",
-          ", turnover: ", round(turnover, 2), 
+          ", turnover: ", round(turnover, 2),
           ", direct_costs: ", round(direct_costs, 2),
           ", variable_costs: ", round(variable_costs, 2),
-          ", fertilizer amount: ", round(n_fertilizer, 2),
-          ", organic fertilizer amount: ", round(org_fertilizer, 2),
+          ", CAN: ", round(fert_values$can_27n, 2),
+          ", DAP: ", round(fert_values$dap_18n, 2),
+          ", cattle_slurry: ", round(fert_values$cattle_slurry, 2),
+          ", cattle_pig_slurry: ", round(fert_values$cattle_pig_slurry, 2),
+          ", biogas_digestate: ", round(fert_values$biogas_digestate, 2),
           ", contribution_margin: ", round(contribution_margin, 2))
-  
+
   tibble(
     crop = crop_name,
     production_system = system_label,
@@ -251,8 +351,11 @@ parse_results_table <- function(doc, crop_name, system_label) {
     variable_costs = variable_costs,
     contribution_margin = contribution_margin,
     execution_costs = execution_costs,
-    n_fertilizer = n_fertilizer,
-    org_fertilizer = org_fertilizer,
+    can_27n = fert_values$can_27n,
+    dap_18n = fert_values$dap_18n,
+    cattle_slurry = fert_values$cattle_slurry,
+    cattle_pig_slurry = fert_values$cattle_pig_slurry,
+    biogas_digestate = fert_values$biogas_digestate,
     income = income
   )
 }
@@ -273,7 +376,7 @@ if (identical(KULTURGRUPPEN, "Alle")) {
   for (kg in KULTURGRUPPEN) {
     kulturgruppen_params <- c(kulturgruppen_params, list(selectedKulturgruppen = kg))
   }
-  
+
   doc <- make_req(file.path(BASE, "postHv.html")) |>
     req_headers(`Content-Type` = "application/x-www-form-urlencoded") |>
     req_body_form(!!!kulturgruppen_params) |>
@@ -281,7 +384,7 @@ if (identical(KULTURGRUPPEN, "Alle")) {
     resp_html()
 }
 
-# 2) state=1 -> Wirtschaftsart = integriert
+# 2) state=1 -> Wirtschaftsart
 cultivation_val <- option_value_by_label(doc, "cultivation", TARGET$cultivation_label)
 if (is.na(cultivation_val)) cultivation_val <- TARGET$cultivation_label
 doc <- post_state_html(list(state = 1, cultivation = cultivation_val))
@@ -302,84 +405,101 @@ message("Found ", nrow(crops), " crops.")
 results <- map_dfr(seq_len(nrow(crops)), function(i) {
   crop_name <- crops$crop[i]
   crop_val  <- crops$value[i]
-  
+
   Sys.sleep(POLITE_DELAY_MS / 1000)
-  
-  # state=2 -> choose crop
-  doc2 <- post_state_html(list(state = 2, cropId = crop_val))
-  
+
+  # state=2 -> choose crop (safe: skip this crop if the network call fails)
+  doc2 <- safe_post_state_html(list(state = 2, cropId = crop_val), crop_name)
+  if (is.null(doc2)) {
+    message("Skip (network error choosing crop): ", crop_name)
+    return(NULL)
+  }
+
   # Get all available systems for this crop
   systems <- get_all_systems(doc2)
-  
+
   if (is.null(systems) || nrow(systems) == 0) {
     message("Skip (no systems available): ", crop_name)
     return(NULL)
   }
-  
+
   message("Processing ", crop_name, " with ", nrow(systems), " production system(s)...")
-  
+
   # Loop through all available systems for this crop
   crop_results <- map_dfr(seq_len(nrow(systems)), function(j) {
     sys_val <- systems$system_value[j]
     sys_label <- systems$system_label[j]
-    
+
+    # --- Pre-filter: skip combos KTBL does not actually offer ---
+    if (!target_is_valid(TARGET$cultivation_label, crop_name, sys_label, TARGET)) {
+      message("  Pre-filter skip: ", crop_name, " | ", sys_label,
+              " - TARGET params not all valid for this combo")
+      return(NULL)
+    }
+
     if (j > 1) Sys.sleep(POLITE_DELAY_MS / 1000)
-    
-    # Select system (state=3)
-    doc3 <- post_state_html(list(state = 3, cropSysId = sys_val))
-    
-    # Set specifications
-    doc_area <- post_state_html(list(
-      state = 11,
-      areaSize = TARGET$plot_size_ha,
-      refineSelection = "true"
-    ))
-    
-    doc_yield <- post_state_html(list(
-      state = 12,
-      soilHarvest = TARGET$yield_soil,
-      refineSelection = "true"
-    ))
-    
-    doc_mech <- post_state_html(list(
-      state = 5,
-      mechanics = TARGET$mechanization,
-      refineSelection = "true"
-    ))
-    
-    doc_dist <- post_state_html(list(
-      state = 5,
-      distance = TARGET$distance_km,
-      refineSelection = "true"
-    ))
-    
-    # state=8 -> calculate
-    doc8 <- post_state_html(list(state = 8))
-    
+
+    ctx <- paste0(crop_name, " | ", sys_label)
+
+    # Each state transition is wrapped in safe_post_state_html so a single
+    # network timeout does not crash the whole loop. If any step fails we
+    # emit an NA row and continue with the next (crop, system).
+    doc3 <- safe_post_state_html(list(state = 3, cropSysId = sys_val), ctx)
+    if (is.null(doc3)) return(na_result_row(crop_name, sys_label))
+
+    doc_area <- safe_post_state_html(list(
+      state = 11, areaSize = TARGET$plot_size_ha, refineSelection = "true"), ctx)
+    if (is.null(doc_area)) return(na_result_row(crop_name, sys_label))
+
+    doc_yield <- safe_post_state_html(list(
+      state = 12, soilHarvest = TARGET$yield_soil, refineSelection = "true"), ctx)
+    if (is.null(doc_yield)) return(na_result_row(crop_name, sys_label))
+
+    doc_mech <- safe_post_state_html(list(
+      state = 5, mechanics = TARGET$mechanization, refineSelection = "true"), ctx)
+    if (is.null(doc_mech)) return(na_result_row(crop_name, sys_label))
+
+    doc_dist <- safe_post_state_html(list(
+      state = 5, distance = TARGET$distance_km, refineSelection = "true"), ctx)
+    if (is.null(doc_dist)) return(na_result_row(crop_name, sys_label))
+
+    doc8 <- safe_post_state_html(list(state = 8), ctx)
+    if (is.null(doc8)) return(na_result_row(crop_name, sys_label))
+
+    if (!page_matches_crop(doc8, crop_name)) {
+      selected_val <- html_attr(
+        html_node(doc8, xpath = "//select[@name='cropId']/option[@selected]"),
+        "value"
+      )
+      message("Session state mismatch: expected '", crop_name, "' (", sys_label, ")",
+              " but page has selected cropId: '", selected_val, "' — returning NA row")
+      return(na_result_row(crop_name, sys_label))
+    }
+
     out <- parse_results_table(doc8, crop_name, sys_label)
     if (is.null(out)) {
       message("No table parsed for: ", crop_name, " (", sys_label, ")")
-      return(NULL)
+      return(na_result_row(crop_name, sys_label))
     }
     out
   })
-  
+
   crop_results
 })
 
 # 5) Format and save results
+# arrange(is.na(income)) before distinct() ensures NA rows go AFTER real rows,
+# so if duplicates ever exist for the same (crop, system), distinct() keeps
+# the row that actually has data instead of the NA placeholder.
 results_final <- results |>
+  arrange(crop, production_system, is.na(income)) |>
   distinct(crop, production_system, .keep_all = TRUE) |>
-  select(crop, production_system, yield, price, turnover, direct_costs, 
-         direct_cost_free, variable_costs, contribution_margin, 
-         execution_costs, n_fertilizer, org_fertilizer, income) |>
+  select(crop, production_system, yield, price, turnover, direct_costs,
+         direct_cost_free, variable_costs, contribution_margin,
+         execution_costs,
+         can_27n, dap_18n, cattle_slurry, cattle_pig_slurry, biogas_digestate,
+         income) |>
   arrange(crop, production_system)
-
-# print(results_final, n = 40)
-
-# test-save results
-# write.csv(results_final, here("ktbl_all_systems_test.csv"))
-# cat("\nSaved: ktbl_all_systems_test.csv (", nrow(results_final), " rows)\n", sep = "")
 
 # Clean up
 unlink(cookie_file)
