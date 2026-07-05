@@ -85,5 +85,5 @@ Output: `run_<RUN_TAG>/ktbl_costs_all_<RUN_TAG>.csv` (combined) + 48 per-combo C
 
 Original (v1): Bartosz Bartkowski (bartosz.bartkowski@ufz.de) and Malin Gütschow (malin-sophie.guetschow@ufz.de), based on [Christoph Pahmeyer's approach](https://github.com/fruchtfolge/KTBL-APIs).
 
-V2/V3: Giovanna Limon (giovanna.limon@ufz.de), May 2026.
-The v2 and v3 (pre-filter design and code review) was developed with assistance from [Anthropic's Claude Code (Sonnet 4.5)](https://www.anthropic.com/claude)
+V2: Giovanna Limon (giovanna.limon@ufz.de), May 2026.
+The v2 (pre-filter design and code review) was developed with assistance from [Claude Code (Sonnet 4.5)](https://www.anthropic.com/claude)
