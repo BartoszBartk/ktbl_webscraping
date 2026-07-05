@@ -15,6 +15,7 @@
 #                 - cattle_slurry      (Gülle, Rind)
 #                 - cattle_pig_slurry  (Gülle, Rind und Schwein gemischt)
 #                 - biogas_digestate   (Gärrest, Biogasanlage)
+#                 - cattle_solid_manure = "Rottemist, Rind"          
 #               Uses exact-match
 # Author: Bartosz Bartkowski
 # Revised by: Giovanna Limon v2
@@ -71,7 +72,8 @@ FERTILIZER_MAP <- list(
   dap_18n           = "Diammonphosphat (18 % N, 46 % P₂O₅), lose",
   cattle_slurry     = "Gülle, Rind",
   cattle_pig_slurry = "Gülle, Rind und Schwein gemischt",
-  biogas_digestate  = "Gärrest, Biogasanlage"
+  biogas_digestate  = "Gärrest, Biogasanlage",
+  cattle_solid_manure = "Rottemist, Rind"           # added
 )
 
 # --------------------------
@@ -171,7 +173,7 @@ na_result_row <- function(crop_name, system_label) {
     execution_costs = NA_real_,
     can_27n = NA_real_, dap_18n = NA_real_,
     cattle_slurry = NA_real_, cattle_pig_slurry = NA_real_,
-    biogas_digestate = NA_real_,
+    biogas_digestate = NA_real_, cattle_solid_manure = NA_real_,
     income = NA_real_
   )
 }
@@ -338,6 +340,7 @@ parse_results_table <- function(doc, crop_name, system_label) {
           ", cattle_slurry: ", round(fert_values$cattle_slurry, 2),
           ", cattle_pig_slurry: ", round(fert_values$cattle_pig_slurry, 2),
           ", biogas_digestate: ", round(fert_values$biogas_digestate, 2),
+          ", cattle_solid_manure: ", round(fert_values$cattle_solid_manure, 2),
           ", contribution_margin: ", round(contribution_margin, 2))
 
   tibble(
@@ -356,6 +359,7 @@ parse_results_table <- function(doc, crop_name, system_label) {
     cattle_slurry = fert_values$cattle_slurry,
     cattle_pig_slurry = fert_values$cattle_pig_slurry,
     biogas_digestate = fert_values$biogas_digestate,
+    cattle_solid_manure = fert_values$cattle_solid_manure,
     income = income
   )
 }
@@ -498,6 +502,7 @@ results_final <- results |>
          direct_cost_free, variable_costs, contribution_margin,
          execution_costs,
          can_27n, dap_18n, cattle_slurry, cattle_pig_slurry, biogas_digestate,
+         cattle_solid_manure,
          income) |>
   arrange(crop, production_system)
 

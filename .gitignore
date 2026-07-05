@@ -10,3 +10,6 @@
 .RData
 .Rproj.user/
 .DS_Store
+
+
+run_*/
