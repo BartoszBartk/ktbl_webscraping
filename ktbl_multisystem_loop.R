@@ -26,10 +26,16 @@ require(readr)
 require(here)
 
 # --------------------------
-# Output directory: write everything inside webscraping_v2/ so we don't
-# overwrite v1 files in the project root.
+# Run tag: appended to every output filename so successive runs never
+# overwrite each other. Change this before each new overnight run.
 # --------------------------
-OUT_DIR <- here("webscraping_v2")
+RUN_TAG <- "v3_fert"
+
+# --------------------------
+# Output directory: write everything into a run-specific subfolder so
+# each run is fully self-contained and easy to tell apart.
+# --------------------------
+OUT_DIR <- here(paste0("run_", RUN_TAG))
 
 if (!dir.exists(OUT_DIR)) {
   dir.create(OUT_DIR, recursive = TRUE)
@@ -81,7 +87,7 @@ for (i in seq_len(nrow(combos))) {
   # This makes the loop RESUMABLE: if a network error kills the run halfway,
   # re-running the loop continues from where it stopped instead of redoing
   # everything from scratch.
-  combo_csv <- file.path(OUT_DIR, paste0("ktbl_all_systems_", combos$labels[i], ".csv"))
+  combo_csv <- file.path(OUT_DIR, paste0("ktbl_all_systems_", combos$labels[i], "_", RUN_TAG, ".csv"))
   if (file.exists(combo_csv)) {
     message("Skipping combo ", i, "/", nrow(combos),
             " (already saved): ", combos$labels[i])
@@ -99,7 +105,7 @@ for (i in seq_len(nrow(combos))) {
   )
 
   # run scraping script (this only works on Linux/macOS)
-  source(here("webscraping_v2", "ktbl_multisystem_scraper.r"))
+  source(here("ktbl_multisystem_scraper.r"))
   # Windows alternative (necessary due to UTF-8 encoding)
   # eval(parse(here("webscraping_v2", "ktbl_multisystem_scraper.r"), encoding = "UTF-8"))
 
@@ -113,9 +119,9 @@ for (i in seq_len(nrow(combos))) {
   # save results for this combination INSIDE webscraping_v2/
   assign(paste0("results_final_", i), results_final)
   write.csv(results_final,
-            file.path(OUT_DIR, paste0("ktbl_all_systems_", combos$labels[i], ".csv")),
+            file.path(OUT_DIR, paste0("ktbl_all_systems_", combos$labels[i], "_", RUN_TAG, ".csv")),
             row.names = FALSE)
-  cat(paste0("\nSaved: webscraping_v2/ktbl_all_systems_", combos$labels[i], ".csv ("),
+  cat(paste0("\nSaved: run_", RUN_TAG, "/ktbl_all_systems_", combos$labels[i], "_", RUN_TAG, ".csv ("),
       nrow(results_final), " rows)\n", sep = "")
 }
 
@@ -128,11 +134,11 @@ for (i in 2:nrow(combos)) {
 # remove (placeholder Anbausystem)
 ktbl_crops_costs <- subset(ktbl_crops_costs, production_system != "[Anbausystem]")
 
-# save combined dataset INSIDE webscraping_v2/ with the _v2 suffix
+# save combined dataset inside the run folder
 write.csv(ktbl_crops_costs,
-          file.path(OUT_DIR, "ktbl_costs_all_v2.csv"),
+          file.path(OUT_DIR, paste0("ktbl_costs_all_", RUN_TAG, ".csv")),
           row.names = FALSE)
-cat("\nSaved combined dataset: webscraping_v2/ktbl_costs_all_v2.csv (",
+cat("\nSaved combined dataset: run_", RUN_TAG, "/ktbl_costs_all_", RUN_TAG, ".csv (",
     nrow(ktbl_crops_costs), " rows)\n", sep = "")
 
 

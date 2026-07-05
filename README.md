@@ -20,9 +20,9 @@ One row per (crop × production_system × parameter combination) ~6,500 rows × 
 |---|---|---|---|---|---|---|---|---|---|---|
 | — | — | t/ha | €/t | €/ha | €/ha | €/ha | €/ha | €/ha | €/ha | kg/ha |
 
-| `dap_18n` | `cattle_slurry` | `cattle_pig_slurry` | `biogas_digestate` | `income` | `system` | `size` | `soil` | `mech` | `dist` |
-|---|---|---|---|---|---|---|---|---|---|
-| kg/ha | m³/ha | m³/ha | m³/ha | €/ha | — | ha | — | kW | km |
+| `dap_18n` | `cattle_slurry` | `cattle_pig_slurry` | `biogas_digestate` | `cattle_solid_manure` | `income` | `system` | `size` | `soil` | `mech` | `dist` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| kg/ha | m³/ha | m³/ha | m³/ha | t/ha | €/ha | — | ha | — | kW | km |
 
 ## What v2 fixes
 
@@ -42,6 +42,7 @@ In **v2**: 5 separate columns with labeling, raw amounts in kg/ha or m³/ha:
 | `cattle_slurry` | Gülle, Rind | ~3.5–4.5 kg N/m³ |
 | `cattle_pig_slurry` | Gülle, Rind und Schwein gemischt | ~4–5 kg N/m³ |
 | `biogas_digestate` | Gärrest, Biogasanlage | ~5–6 kg N/m³ |
+| `cattle_solid_manure` | Rottemist, Rind | ~6.11 kg N/t |
 
 ### 3. Other fixes
 - v1 `income` calculation fell back to `contribution_margin` when components were missing, the fallback didn't fire in the v1; however v2 removes this fallback system in case of `NA`.
@@ -52,12 +53,17 @@ In **v2**: 5 separate columns with labeling, raw amounts in kg/ha or m³/ha:
 
 ## Run the scraper and the loop
 
+Before running, set `RUN_TAG` at the top of `ktbl_multisystem_loop.R` to a short label for this run (e.g. `"v3_fert"`). Each run writes all output to its own folder `run_<RUN_TAG>/` so previous runs are never overwritten.
+
 ```r
+# 0. Set the run tag in ktbl_multisystem_loop.R before running:
+#    RUN_TAG <- "v3_..."   # change this for every new run
+
 # 1. (Only if KTBL options have changed) re-build the options map
 source("ktbl_options_scraper.r")   # ~1 hour
 
 # 2. (Optional) Save all run messages to a log file for later inspection
-log_con <- file("webscraping_v2/loop_run.log", open = "wt")
+log_con <- file(paste0("run_", RUN_TAG, "/loop_run.log"), open = "wt")
 sink(log_con, type = "message")
 
 # 3. Run the full loop
@@ -68,16 +74,16 @@ sink(type = "message")
 close(log_con)
 ```
 
-Output: `webscraping_v2/ktbl_crops_costs_all_v2.csv` (combined) + 48 per-combo CSVs.
+Output: `run_<RUN_TAG>/ktbl_costs_all_<RUN_TAG>.csv` (combined) + 48 per-combo CSVs in the same folder.
 
 ## Limitations
 
 - For some crops with multi-component yield (e.g. soy, grass with multiple cuts), only the first yield component is scraped. As a result, `yield × price` may not equal `turnover` for those rows. The `turnover` and downstream financial figures remain correct.
-- Other organic fertilizers used outside the 5 mapped products (e.g. Rottemist, Hühnermist), due to the scope of our study. 
+- Other products beyond the 6 mapped fertilizers  (e.g. Hühnermist) are not included. 
 
 ## Authors
 
 Original (v1): Bartosz Bartkowski (bartosz.bartkowski@ufz.de) and Malin Gütschow (malin-sophie.guetschow@ufz.de), based on [Christoph Pahmeyer's approach](https://github.com/fruchtfolge/KTBL-APIs).
 
-V2: Giovanna Limon (giovanna.limon@ufz.de), May 2026.
-The v2 (pre-filter design and code review) was developed with assistance from [Anthropic's Claude Code (Sonnet 4.5)](https://www.anthropic.com/claude)
+V2/V3: Giovanna Limon (giovanna.limon@ufz.de), May 2026.
+The v2 and v3 (pre-filter design and code review) was developed with assistance from [Anthropic's Claude Code (Sonnet 4.5)](https://www.anthropic.com/claude)
