@@ -2,7 +2,7 @@
 
 ## Naming convention
 
-**v1 / v2** refer to scraper **code versions** (structural rewrites of the scraper logic).  
+**v1 / v2** refer to scraper **code versions**. 
 **Run numbers** (1st_run, 2nd_run, 3rd_run …) refer to **data runs** each time the loop is executed .  
 These are independent: v2 of the scraper can be used for any number of runs.
 
