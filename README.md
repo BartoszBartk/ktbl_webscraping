@@ -53,11 +53,11 @@ In **v2**: 5 separate columns with labeling, raw amounts in kg/ha or m³/ha:
 
 ## Run the scraper and the loop
 
-Before running, set `RUN_TAG` at the top of `ktbl_multisystem_loop.R` to a short label for this run (e.g. `"v3_fert"`). Each run writes all output to its own folder `run_<RUN_TAG>/` so previous runs are never overwritten.
+Before running, set `RUN_TAG` at the top of `ktbl_multisystem_loop.R`. Each run writes all output to its own folder `run_<RUN_TAG>/` so previous runs are never overwritten. Use `Nth_run` naming (e.g. `"4th_run"`) — `v1`/`v2` are scraper code versions, not run numbers.
 
 ```r
 # 0. Set the run tag in ktbl_multisystem_loop.R before running:
-#    RUN_TAG <- "v3_..."   # change this for every new run
+#    RUN_TAG <- "4th_run"  # increment for each new run; v1/v2 are scraper versions, not run numbers
 
 # 1. (Only if KTBL options have changed) re-build the options map
 source("ktbl_options_scraper.r")   # ~1 hour
@@ -86,4 +86,4 @@ Output: `run_<RUN_TAG>/ktbl_costs_all_<RUN_TAG>.csv` (combined) + 48 per-combo C
 Original (v1): Bartosz Bartkowski (bartosz.bartkowski@ufz.de) and Malin Gütschow (malin-sophie.guetschow@ufz.de), based on [Christoph Pahmeyer's approach](https://github.com/fruchtfolge/KTBL-APIs).
 
 V2: Giovanna Limon (giovanna.limon@ufz.de), May 2026.
-The v2 (pre-filter design and code review) was developed with assistance from [Claude Code (Sonnet 4.5)](https://www.anthropic.com/claude)
+The v2 (pre-filter design and code review) was developed with assistance from [Anthropic's Claude Code (Sonnet 4.5)](https://www.anthropic.com/claude)
