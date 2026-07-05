@@ -1,15 +1,6 @@
 # Dev Notes — KTBL Webscraper
 
-## Naming convention
-
-**v1 / v2** refer to scraper **code versions**. 
-**Run numbers** (1st_run, 2nd_run, 3rd_run …) refer to **data runs** each time the loop is executed .  
-These are independent: v2 of the scraper can be used for any number of runs.
-
-Run history:
-- Runs before 2026-06-22 used v1 of the scraper (output in parent folder, now archive)
-- **3rd_run** → run in June 2026 using v2 scraper; output folder `run_v3_fert/` (legacy name, not renamed because KTBL_preprocessing already reads `ktbl_costs_all_v3_fert.csv`)
-- Future runs: set `RUN_TAG <- "4th_run"` (or `"5th_run"` etc.) in `ktbl_multisystem_loop.R` before each run
+Note: `v1`/`v2` are scraper code versions; `RUN_TAG` is independent and tracks data runs (e.g. `r3`, `r4`).
 
 ## 2026-06-22
 
